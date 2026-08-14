@@ -1,0 +1,5 @@
+# Cliente de Prisma generado: no se formatea
+/src/generated
+/dist
+/node_modules
+pnpm-lock.yaml

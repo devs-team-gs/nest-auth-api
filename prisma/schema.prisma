@@ -1,0 +1,55 @@
+// Schema de Prisma — https://pris.ly/d/prisma-schema
+//
+// La URL de la base NO se declara acá: en Prisma 7 el CLI la lee de `prisma.config.ts`
+// y la app la usa en runtime a través del driver adapter (src/prisma/prisma.service.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "nodejs"
+
+  // 👇 NestJS compila a CommonJS y el cliente de Prisma 7 es ESM por defecto.
+  //    Sin esta línea, al arrancar la app explota con ERR_REQUIRE_ESM.
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+  MODERATOR
+}
+
+model User {
+  id       String @id @default(uuid())
+  email    String @unique // 👈 el índice único evita registros duplicados
+  password String // 👈 acá va el HASH de bcrypt, nunca el texto plano
+  name     String
+  role     Role   @default(USER) // 👈 nace como USER, siempre
+
+  // null = no tiene sesión activa. Guarda bcrypt(refresh_token), igual que una contraseña.
+  hashedRefreshToken String?
+
+  posts Post[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Existe solo para demostrar ownership sobre un recurso que NO es el propio usuario:
+/// "¿podés editar este post?" depende de si lo escribiste vos.
+model Post {
+  id        String  @id @default(uuid())
+  title     String
+  content   String?
+  published Boolean @default(false)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

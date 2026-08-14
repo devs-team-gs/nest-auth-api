@@ -1,4 +1,7 @@
 {
   "extends": "./tsconfig.json",
+  // `include` explícito: sin esto, tsc también tomaría prisma/seed.ts y
+  // prisma.config.ts, inferiría otro rootDir y el build saldría en dist/src/main.js.
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
 }
