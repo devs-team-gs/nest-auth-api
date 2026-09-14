@@ -29,7 +29,7 @@ const SELECT_PUBLICO = {
 export class UsersService {
   private readonly SALT_ROUNDS = 10;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async create(dto: CreateUserDto) {
     const existe = await this.prisma.user.findUnique({
