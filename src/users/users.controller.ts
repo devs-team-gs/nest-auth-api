@@ -16,7 +16,6 @@ import { Role } from '../auth/enums/role.enum';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserEntity } from './entities/user.entity';
 import { UsersService } from './users.service';
-import { Roles } from 'src/auth/decorators/roles.decorator';
 
 /**
  * Todos los endpoints de acá nacen protegidos: el AuthGuard es global y ninguno está
@@ -24,7 +23,7 @@ import { Roles } from 'src/auth/decorators/roles.decorator';
  */
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(private readonly usersService: UsersService) {}
 
   @Get()
   @Auth(Role.ADMIN) // 👈 solo el admin lista toda la base de usuarios
