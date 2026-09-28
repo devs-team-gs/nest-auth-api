@@ -1,0 +1,39 @@
+# Base de datos EXCLUSIVA para los tests e2e.
+#
+# ¿Por qué una base aparte y no la de desarrollo? Porque limpiarBase() hace deleteMany()
+# sobre todas las tablas antes de cada test. Si apuntara a tu base de desarrollo, la
+# primera corrida de e2e te borra todo lo que tenías cargado.
+#
+# Convive con docker-compose.yml: otro puerto, otro contenedor, otro volumen.
+
+# `name` propio: sin esto los dos compose comparten el nombre de proyecto (el de la
+# carpeta) y Docker trata al contenedor de test como "huérfano" del de desarrollo — con
+# el riesgo de que un `docker compose down --remove-orphans` te lo borre de paso.
+name: integrar-test
+
+services:
+  postgres-test:
+    # La MISMA imagen que desarrollo: los tests tienen que probar tu Postgres, no otro.
+    image: postgres:16-alpine
+    container_name: integrar-postgres-test
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: integrar_test
+    ports:
+      # 5434 afuera para no chocar ni con el Postgres de desarrollo (5432) ni con otros
+      # contenedores de la máquina. docs/clase-39.md usa 5433; acá ya estaba ocupado.
+      - '5434:5432'
+    volumes:
+      # ⚠️ CON /data al final: es postgres:16. En postgres:18 cambió el datadir.
+      - pgdata_test:/var/lib/postgresql/data
+    healthcheck:
+      # `up -d --wait` espera este healthcheck: cuando el script sigue, la base ACEPTA
+      # conexiones. Sin esto, migrate deploy corre contra una base que todavía arranca.
+      test: ['CMD-SHELL', 'pg_isready -U test -d integrar_test']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata_test:
