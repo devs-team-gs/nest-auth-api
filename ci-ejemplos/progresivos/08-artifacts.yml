@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 8 · Guardar el reporte de coverage como artifact
+#
+# Qué agrega respecto al paso 7:
+#   - `pnpm test:cov` en vez de `pnpm test`: además de correr los tests, aplica el
+#     coverageThreshold del package.json. Si la cobertura baja del mínimo, falla.
+#   - upload-artifact: el runner se destruye al terminar y el reporte con él.
+#     Subiéndolo, queda para descargar desde la página de la corrida.
+#
+# Solo cambia el job `verificar`; `e2e` queda igual que en el paso 7.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: Lint, tests unitarios y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios con coverage
+        run: pnpm test:cov
+
+      # if: always() → se sube aunque los tests hayan fallado: justo ahí lo querés ver.
+      - name: Subir reporte de coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7 # el default son 90 días de basura
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: Tests e2e
+    needs: verificar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: integrar_test
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Preparar variables de test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      - name: Tests e2e
+        run: pnpm test:e2e:ci

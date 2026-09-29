@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 6 · Los e2e: un Postgres dentro del CI
+#
+# Qué agrega respecto al paso 5: un service container de Postgres, las
+# migraciones y la suite e2e. Todo en UN solo job (el paso 7 lo separa).
+#
+# Es el compose.test.yaml traducido a `services:`:
+#   image, environment → env, ports, healthcheck → options: --health-*
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, tests, build y e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # La MISMA imagen que compose.test.yaml: probamos tu Postgres, no otro.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          # crear-app.ts se niega a arrancar si la base no se llama integrar_test.
+          POSTGRES_DB: integrar_test
+        ports:
+          # 5434 como en local: así .env.test.example sirve tal cual en el CI.
+          - 5434:5432
+        # 🔑 Sin healthcheck, las migraciones corren contra un Postgres que todavía
+        # arranca y fallan... a veces. GitHub espera a que esté "healthy".
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      # .env.test no está en git, pero .env.test.example sí, con valores completos:
+      # no son secretos, es una base descartable. Copiarlo evita duplicar las
+      # variables de test en el YAML: hay UNA sola fuente de verdad.
+      - name: Preparar variables de test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      # test:e2e:ci y no test:e2e: el segundo dispara pretest:e2e, que levanta
+      # compose.test.yaml. Acá la base ya la levantó `services:` en el mismo puerto
+      # y los dos contenedores chocarían.
+      - name: Tests e2e
+        run: pnpm test:e2e:ci

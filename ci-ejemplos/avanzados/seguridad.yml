@@ -1,0 +1,130 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Seguridad en el CI
+#
+# Qué muestra:
+#   - dependency-review: bloquea el PR si AGREGA una dependencia con una
+#     vulnerabilidad conocida de severidad alta o crítica.
+#   - `pnpm audit`: revisa TODO el árbol de dependencias, solo como aviso.
+#   - CodeQL: análisis estático del código propio (inyecciones, XSS, etc.).
+#   - Mínimo privilegio: `permissions: {}` arriba y cada job pide lo suyo.
+#   - Pinning por SHA de las actions (al final del archivo, comentado).
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque es un repo de
+# clase sin usuarios reales. Además, dependency-review y CodeQL necesitan el
+# dependency graph / code scanning habilitados: vienen gratis en repos
+# públicos, pero en repos privados requieren GitHub Advanced Security.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Seguridad
+
+on:
+  pull_request:
+    branches: [main]
+  # CodeQL también corre en main: así hay una "línea base" contra la que
+  # comparar los PRs y las alertas quedan en Security → Code scanning.
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 🔒 El GITHUB_TOKEN arranca SIN ningún permiso. Si una action comprometida
+# corre en un job, solo puede hacer lo que ese job pidió explícitamente.
+permissions: {}
+
+jobs:
+  dependency-review:
+    name: Revisión de dependencias
+    # Compara las dependencias de la rama del PR contra las de main: solo
+    # tiene sentido en un PR.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Revisar dependencias nuevas
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+
+  audit:
+    name: pnpm audit (informativo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # `pnpm audit` lee el lockfile: no hace falta instalar las dependencias.
+      #
+      # ¿Por qué `continue-on-error`, si en clase dijimos que es un antipatrón?
+      # Porque este chequeo falla por cosas que el PR NO tocó: sale un CVE
+      # nuevo en una dependencia vieja y de golpe TODOS los PRs quedan en rojo,
+      # aunque cambien un README. Eso enseña a ignorar el rojo. Acá queda como
+      # aviso (step amarillo en el log); lo que bloquea es dependency-review,
+      # que solo mira lo que el PR agrega.
+      - name: Auditar dependencias
+        run: pnpm audit --audit-level=high
+        continue-on-error: true
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Para subir los resultados a la pestaña Security.
+      security-events: write
+      # Necesario en repos privados para leer el estado del workflow.
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # JavaScript/TypeScript no necesita compilarse para analizarse:
+      # CodeQL lee el código fuente directamente.
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+
+      - name: Analizar
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:javascript-typescript
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 📌 Pinning por SHA
+#
+# `@v7` es un TAG, y un tag se puede mover: si alguien compromete la cuenta
+# del autor de una action, puede apuntar `v7` a código malicioso y tu CI lo
+# ejecuta en la próxima corrida (pasó de verdad con tj-actions/changed-files
+# en 2025). Un SHA de commit es inmutable:
+#
+#   - name: Checkout
+#     uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+#
+# El comentario `# v7.0.1` es para humanos, y para que Dependabot/Renovate
+# sepan qué versión es y abran PRs actualizando SHA y comentario juntos.
+#
+# Costo: se lee peor y hay que actualizar a mano (o con un bot). Mínimo
+# razonable: pinear por SHA las actions de terceros; las de `actions/*` y
+# `github/*` son de GitHub mismo.
+# ─────────────────────────────────────────────────────────────────────────────

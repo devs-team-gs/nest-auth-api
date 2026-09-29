@@ -1,0 +1,127 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Corrida nocturna + ejecución manual con parámetros
+#
+# Qué muestra:
+#   - `schedule` con cron (en UTC) para correr la suite todas las noches.
+#   - `workflow_dispatch` con inputs (choice + boolean) que aparecen como un
+#     formulario en el botón "Run workflow".
+#   - La trampa clásica: en una corrida programada `inputs` viene VACÍO, así
+#     que cada condición tiene que contemplar los dos eventos.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque nadie depende de
+# él en producción: si una dependencia se rompe "sola" nos enteramos en el
+# próximo PR. En un proyecto vivo, con dependencias que se actualizan solas
+# (Renovate/Dependabot) o integraciones externas, la corrida nocturna sí paga.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Nightly
+
+on:
+  schedule:
+    # De lunes a viernes a las 06:17 UTC = 03:17 en Argentina (UTC-3).
+    # El cron de GitHub SIEMPRE es UTC. El minuto 17 es a propósito: en punto
+    # (minuto 0) es cuando más workflows arrancan y más se demoran.
+    - cron: '17 6 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      node-version:
+        description: 'Versión de Node'
+        type: choice
+        options: ['24', '22']
+        default: '24'
+      correr-e2e:
+        description: '¿Correr también los e2e? (tardan más)'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unitarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          # En el cron `inputs.node-version` está vacío → el `||` pone el default.
+          node-version: ${{ inputs.node-version || '24' }}
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Tests unitarios
+        run: pnpm test
+
+  e2e:
+    name: E2E
+    needs: unit
+    # ⚠️ La trampa: en el cron `inputs.correr-e2e` NO es `true` (no existe).
+    # Si pusieras solo `if: inputs.correr-e2e`, la corrida nocturna nunca
+    # correría los e2e, y nadie se daría cuenta porque el workflow sale verde.
+    if: github.event_name == 'schedule' || inputs.correr-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: integrar_test
+        # Mismo puerto que compose.test.yaml, así .env.test sirve tal cual.
+        ports: ['5434:5432']
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version || '24' }}
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      # .env.test.example está commiteado con valores de test (nada secreto).
+      - name: Preparar .env.test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      # `test:e2e:ci` y no `test:e2e`: este último tiene un `pretest` que
+      # levanta Postgres con docker compose, y acá ya lo levantó `services:`.
+      - name: Tests e2e
+        run: pnpm test:e2e:ci
+
+# 📬 Si la corrida programada falla, GitHub le manda un mail a quien modificó
+# el cron por última vez. Y en repos públicos sin actividad por 60 días,
+# GitHub desactiva los workflows programados.

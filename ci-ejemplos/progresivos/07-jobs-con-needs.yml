@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 7 · Dos jobs: verificar primero, e2e después
+#
+# Qué agrega respecto al paso 6: separa el pipeline en dos jobs con `needs`.
+#   - El lint no necesita base de datos; el e2e sí. Cada job tiene lo suyo.
+#   - Si `verificar` falla, `e2e` ni arranca: no gastamos minutos en levantar
+#     Postgres para un código que ni compila (fail fast entre jobs).
+#   - El PR muestra dos checks: "Verificar ✅  E2E ❌". Sabés qué se rompió sin
+#     abrir el log.
+#
+# El costo: cada job corre en OTRA máquina, así que repite checkout + install.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: Lint, tests unitarios y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: Tests e2e
+    needs: verificar # 👈 espera a que verificar termine BIEN
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Solo este job necesita Postgres: el de verificar ni lo levanta.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: integrar_test
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      # Otra máquina, otra vez vacía: hay que repetir la preparación.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Preparar variables de test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      - name: Tests e2e
+        run: pnpm test:e2e:ci

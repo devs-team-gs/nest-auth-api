@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Reusable workflow (el que llama)
+#
+# Qué muestra: tres jobs que llaman al MISMO workflow (`reusable-setup.yml`)
+# con distintos `inputs`. Cada llamada es un job independiente, en su propia
+# máquina, y corren en paralelo.
+#
+# 📍 Para que ande, los DOS archivos tienen que estar en `.github/workflows/`:
+#   .github/workflows/usar-reusable.yml
+#   .github/workflows/reusable-setup.yml
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque con un solo
+# workflow es más fácil de leer tener los steps a la vista (ver LEEME.md).
+# Fijate además el costo: cada llamada repite checkout + install + prisma
+# generate. Tres jobs chicos en paralelo dan feedback antes, pero gastan
+# más minutos que un job con tres steps.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI (con reusable)
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Un job que llama a un reusable no tiene `runs-on` ni `steps`: solo `uses` + `with`.
+  lint:
+    name: Lint
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      script: lint
+
+  test:
+    name: Tests
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      script: test
+
+  build:
+    name: Build
+    # `needs` funciona igual que con un job común.
+    needs: [lint, test]
+    uses: ./.github/workflows/reusable-setup.yml
+    with:
+      script: build

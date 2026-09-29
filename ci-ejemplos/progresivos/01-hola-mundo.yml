@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 1 · Hola mundo: entender el runner
+#
+# Qué muestra: un workflow mínimo (on + jobs + runs-on + steps) y cómo es la
+# máquina donde corre. No hay checkout todavía, a propósito.
+#
+# Para probarlo: copialo a .github/workflows/ y hacé push a main.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  explorar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hola mundo
+        run: echo "Hola desde GitHub Actions 👋"
+
+      - name: ¿Dónde estoy?
+        run: |
+          echo "Directorio: $(pwd)"
+          echo "Usuario:    $(whoami)"
+          uname -a
+          date
+
+      # 👀 Mirá el log de este step: la carpeta está VACÍA. El runner no tiene tu código.
+      - name: ¿Qué hay acá?
+        run: ls -la
+
+      # El runner de Ubuntu ya trae Node, Docker y Git: muchas veces solo hay que elegir versión.
+      - name: ¿Qué herramientas tengo?
+        run: |
+          node --version
+          docker --version
+          git --version

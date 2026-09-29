@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 3 · Preparar el entorno: pnpm + Node + dependencias
+#
+# Qué agrega respecto al paso 2: instalar pnpm y Node, cachear las dependencias
+# e instalarlas exactamente como dice el lockfile.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  instalar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ⚠️ pnpm va ANTES que setup-node: para `cache: pnpm`, setup-node le pregunta a
+      # pnpm dónde guarda los paquetes. Si pnpm todavía no existe, falla.
+      #
+      # Sin `version:`: la action la lee del campo "packageManager" del package.json.
+      # Así la versión de pnpm vive en un solo lugar y el CI usa la misma que vos.
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24 # la misma versión mayor que usás en tu máquina
+          cache: pnpm
+
+      # --frozen-lockfile: instala EXACTAMENTE lo del pnpm-lock.yaml. Si el lockfile
+      # no coincide con el package.json (alguien no lo commiteó), falla. Eso queremos.
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Versiones
+        run: |
+          node --version
+          pnpm --version

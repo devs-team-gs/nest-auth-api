@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 4 · Las verificaciones: lint, tests unitarios y build
+#
+# Qué agrega respecto al paso 3: los scripts del package.json, en orden de
+# "fail fast" (lo barato primero). Y un step propio de ESTE proyecto: generar
+# el cliente de Prisma.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      # 🔑 El cliente de Prisma se genera en src/generated, que está en .gitignore:
+      # en el runner NO existe. Sin este step, el lint (que chequea tipos), los tests
+      # y el build fallan con "Cannot find module '../generated/prisma/client'".
+      # No necesita base de datos: solo lee prisma/schema.prisma.
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      # `pnpm lint` solo VERIFICA. Si tuviera --fix, arreglaría la copia del runner
+      # (que se tira al terminar) y pasaría en verde con el error todavía en tu código.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

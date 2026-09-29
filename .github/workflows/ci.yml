@@ -1,0 +1,129 @@
+# CI del proyecto: cada PR a main y cada push a main pasan por acá.
+#
+# Es el resultado final de ci-ejemplos/progresivos/ (paso 8) más dos detalles:
+# workflow_dispatch para volver a correrlo a mano y permisos mínimos.
+#
+#   verificar ──► e2e
+#   (lint, formato, unitarios + coverage, build)   (Postgres + migraciones + e2e)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# El GITHUB_TOKEN solo puede leer el repo. Este workflow no publica nada, así que
+# no necesita más: si una action de terceros se comprometiera, no podría escribir.
+permissions:
+  contents: read
+
+jobs:
+  # ⚠️ Los `name` de los jobs son los nombres de los checks. Si los marcás como
+  # obligatorios en las reglas de la rama y después los renombrás, ningún PR se
+  # puede mergear: la regla queda esperando un check que ya no existe.
+  verificar:
+    name: Lint, tests unitarios y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # La versión de pnpm sale del campo "packageManager" del package.json.
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      # src/generated está en .gitignore: sin esto no compila nada.
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      # test:cov aplica el coverageThreshold del package.json: si baja, falla.
+      - name: Tests unitarios con coverage
+        run: pnpm test:cov
+
+      - name: Subir reporte de coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: Tests e2e
+    needs: verificar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          # crear-app.ts se niega a correr si la base no se llama integrar_test.
+          POSTGRES_DB: integrar_test
+        ports:
+          # Mismo puerto que compose.test.yaml: .env.test.example sirve tal cual.
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      # Valores de una base descartable, no secretos: por eso viven en el repo.
+      - name: Preparar variables de test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      # Sin el pretest:e2e de test:e2e, que levantaría compose.test.yaml y chocaría
+      # con el Postgres de `services:`.
+      - name: Tests e2e
+        run: pnpm test:e2e:ci
