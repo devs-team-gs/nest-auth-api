@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Usar una composite action local
+#
+# Qué muestra: dos jobs que comparten el setup con un solo step
+# (`uses: ./.github/actions/setup`) en vez de repetir 4 steps en cada uno.
+#
+# 📍 Para que ande, `composite-action/action.yml` tiene que moverse a
+# `.github/actions/setup/action.yml`.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque nuestro CI tiene
+# solo dos jobs: repetir 4 steps dos veces se lee mejor que esconderlos detrás
+# de una action. Paga cuando el mismo setup aparece en muchos jobs o workflows.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI (con composite action)
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, tests y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ⚠️ El checkout va SÍ o SÍ antes: una action local es un archivo del
+      # repo, y el runner arranca vacío. Sin checkout, `./.github/actions/setup`
+      # no existe y el step falla con "Can't find 'action.yml'".
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 👇 Los 4 steps de setup, en uno. El `./` indica "action de este repo".
+      - name: Setup del proyecto
+        uses: ./.github/actions/setup
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Los inputs se pasan con `with`, igual que a cualquier action.
+      - name: Setup del proyecto
+        uses: ./.github/actions/setup
+        with:
+          node-version: 24
+
+      - name: Tests con coverage
+        run: pnpm test:cov

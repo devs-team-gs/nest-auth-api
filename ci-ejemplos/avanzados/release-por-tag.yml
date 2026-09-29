@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Release automático al pushear un tag
+#
+# Qué muestra:
+#   - `on: push: tags` para disparar con `git tag v1.2.0 && git push origin v1.2.0`.
+#   - Verificar ANTES de publicar: si los tests fallan, no hay release.
+#   - Pasar el `dist/` de un job a otro con artifacts.
+#   - Crear el release con `gh` (la CLI de GitHub, ya instalada en el runner)
+#     y notas generadas automáticamente a partir de los PRs mergeados.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque una API no se
+# "distribuye" como un zip: se despliega (ver `cd-environments.yml`). Este
+# patrón es el de una librería o una CLI, donde el usuario baja una versión.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verificar y construir
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      # Los jobs no comparten disco: el `dist/` viaja al otro job como artifact.
+      - name: Subir dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  release:
+    name: Crear el release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Solo este job puede escribir en el repo (crear el release y subir el zip).
+    permissions:
+      contents: write
+
+    steps:
+      - name: Bajar dist
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      # GITHUB_REF_NAME es el nombre del tag (ej. "v1.2.0").
+      - name: Empaquetar
+        run: zip -r "api-${GITHUB_REF_NAME}.zip" dist
+
+      # `--generate-notes` arma el changelog con los PRs desde el tag anterior.
+      # `--verify-tag` falla si el tag no existe en GitHub (no crea uno nuevo).
+      - name: Crear release en GitHub
+        env:
+          # `gh` se autentica con esta variable. El token es el automático
+          # del workflow, con el permiso `contents: write` que pedimos arriba.
+          GH_TOKEN: ${{ github.token }}
+          # No hicimos checkout, así que `gh` no sabe en qué repo está: se lo decimos.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            "api-${GITHUB_REF_NAME}.zip"

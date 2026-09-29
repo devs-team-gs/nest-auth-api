@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Reusable workflow (el "llamado")
+#
+# Qué muestra: un workflow que no se dispara por push ni PR, sino que OTRO
+# workflow lo llama como si fuera una función (`on: workflow_call`), pasándole
+# parámetros (`inputs`). Lo usa `usar-reusable.yml`.
+#
+# 📍 Regla de ubicación: para llamarlo con `uses: ./.github/workflows/...`
+# TIENE que vivir en `.github/workflows/` (no en subcarpetas). Desde otro repo
+# se llama con `uses: owner/repo/.github/workflows/reusable-setup.yml@v1`.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque tenemos UN solo
+# workflow de CI: extraer una "función" que se llama una vez agrega una
+# indirección sin ahorrar nada. Paga cuando una organización tiene muchos repos
+# con el mismo pipeline y quiere mantenerlo en un solo lugar.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Setup y script (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      script:
+        description: 'Script de package.json a correr (lint, test, build...)'
+        type: string
+        required: true
+      node-version:
+        description: 'Versión de Node'
+        type: string
+        default: '24'
+
+jobs:
+  run:
+    # Este nombre se combina con el del job que llama: en el PR se ve
+    # "Lint / pnpm lint", "Tests / pnpm test", etc.
+    name: pnpm ${{ inputs.script }}
+    runs-on: ubuntu-latest
+    # El timeout va ACÁ: el job que llama a un reusable no puede tener
+    # `runs-on`, `steps` ni `timeout-minutes` propios.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      # El input pasa por `env` y no directo en el `run:` con `${{ }}`: así el
+      # valor llega como variable y no se "pega" como texto dentro del script
+      # (evita inyección de comandos si el input viniera de alguien externo).
+      - name: pnpm ${{ inputs.script }}
+        run: pnpm run "$SCRIPT"
+        env:
+          SCRIPT: ${{ inputs.script }}

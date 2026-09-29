@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Construir y publicar la imagen Docker ("build once, deploy many")
+#
+# Qué muestra:
+#   - Buildx + metadata-action para calcular los tags de la imagen.
+#   - Login a GitHub Container Registry (ghcr.io) con el GITHUB_TOKEN automático:
+#     no hace falta crear ningún secret.
+#   - Cache de las capas de Docker en la cache de GitHub Actions (type=gha).
+#   - En PRs se CONSTRUYE (para saber que el Dockerfile anda) pero NO se publica.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque NO tiene
+# Dockerfile (la API se corre con `pnpm start` y Postgres en Docker Compose).
+# Para usarlo haría falta un Dockerfile en la raíz que, entre otras cosas,
+# corra `prisma generate` y `pnpm build` adentro de la imagen.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  image:
+    name: Build y push de la imagen
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Mínimo privilegio: leer el código y escribir en el registry del repo.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Buildx es el "builder moderno" de Docker: es el que sabe usar la cache de GHA.
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # En un PR no hay push, así que no hace falta loguearse.
+      # (Además, un PR desde un fork no recibe permiso de escritura en packages.)
+      - name: Login a GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Calcula los tags a partir del evento. Por ejemplo, para un push a main:
+      #   ghcr.io/<owner>/<repo>:sha-a1b2c3d   ← inmutable: ESTE es el que se despliega
+      #   ghcr.io/<owner>/<repo>:latest        ← móvil: siempre apunta al último de main
+      - name: Calcular tags y labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build (y push en main)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          # 👇 Solo publica si NO es un PR. En un PR, el build sirve de verificación.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reusa capas de corridas anteriores. `mode=max` guarda también las
+          # capas intermedias (ej. la del `pnpm install`), que son las más caras.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+# 🔑 "Build once, deploy many": la imagen `sha-a1b2c3d` se construye UNA vez.
+# Staging y producción despliegan esa misma imagen; lo único que cambia entre
+# ambientes son las variables de entorno. Ver `cd-environments.yml`.
+#
+# ⚠️ Nunca despliegues `latest` a producción: mañana `latest` es otra imagen y
+# no sabés qué versión está corriendo ni a cuál volver si algo sale mal.

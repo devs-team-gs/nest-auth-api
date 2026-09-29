@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Matrix: la misma suite en varias versiones de Node y varios SO
+#
+# Qué muestra: `strategy.matrix` con dos dimensiones (Node 22/24 × Ubuntu/Windows
+# = 4 jobs en paralelo), `fail-fast: false` y un `name:` de job que incluye los
+# valores de la matrix para distinguir cada check en el PR.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque es una API que
+# desplegamos nosotros: corre en UNA sola versión de Node (la 24) y en UN solo
+# SO (Linux). Probar en Windows o en Node 22 cuesta 4
+# veces los minutos y no protege nada que nos importe. La matrix tiene sentido
+# para una LIBRERÍA o una CLI que otros van a instalar en sus propias máquinas.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Tests en matrix
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    # 👇 Sin los valores en el nombre, los 4 checks se llamarían igual en el PR.
+    # ⚠️ Required checks: si protegés `main`, cada combinación es un check
+    # distinto ("Unitarios (Node 22, windows-latest)", ...). Hay que marcar los 4,
+    # y si mañana agregás Node 26 a la lista, marcar el nuevo también.
+    name: Unitarios (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    strategy:
+      # Por defecto, si falla una combinación GitHub cancela las demás.
+      # Con `false` terminan todas: querés saber si falla SOLO en Windows o en todos lados.
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24']
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      # El cliente de Prisma se genera en src/generated (está en .gitignore):
+      # sin este paso los tests ni compilan.
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      # Solo unitarios: los e2e necesitan un `services:` de Postgres, y los
+      # service containers únicamente funcionan en runners Linux.
+      - name: Tests unitarios
+        run: pnpm test

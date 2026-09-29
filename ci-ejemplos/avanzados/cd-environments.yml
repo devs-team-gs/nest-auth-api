@@ -1,0 +1,246 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Pipeline completo de Continuous Delivery con environments
+#
+# Qué muestra:
+#
+#   verify ─┐
+#           ├─► build-image ─► deploy-staging ─► deploy-production
+#   e2e ────┘                   (automático)      (🧑 botón: aprobación)
+#
+#   - `environment:` con sus propios secrets y URL (staging / production).
+#   - El "botón" de Continuous Delivery: en Settings → Environments →
+#     production se configura "Required reviewers". El job queda en pausa
+#     hasta que alguien de esa lista apriete "Approve and deploy".
+#   - Outputs de jobs (`outputs:` + `steps.<id>.outputs`) para pasar el tag de
+#     la imagen: la MISMA imagen que se probó en staging es la que va a prod.
+#   - Concurrency en dos niveles: cancelar CI viejo en PRs, pero NUNCA un deploy.
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque no hay
+# infraestructura donde desplegar (ni servidor, ni staging, ni Dockerfile).
+# Los pasos de deploy son FALSOS: solo imprimen qué harían.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# En PRs, un push nuevo cancela la corrida vieja. En main NO se cancela:
+# la corrida puede estar en medio de un deploy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────── CI: verificar ─────────────────────────────
+  verify:
+    name: Lint, tests y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: integrar_test
+        ports: ['5434:5432']
+        options: >-
+          --health-cmd "pg_isready -U test -d integrar_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Preparar .env.test
+        run: cp .env.test.example .env.test
+
+      - name: Aplicar migraciones
+        run: pnpm test:db:migrate
+
+      - name: Tests e2e
+        run: pnpm test:e2e:ci
+
+  # ──────────────────── Package: construir la imagen UNA vez ────────────────────
+  build-image:
+    name: Construir y publicar imagen
+    needs: [verify, e2e]
+    # En un PR se corre solo la parte de CI. El paquete y los deploys, solo en main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+      packages: write
+
+    # 👇 Lo que este job le "devuelve" a los que dependen de él.
+    # Los jobs no comparten disco ni variables: esta es la forma de pasar un valor.
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Un step escribe `clave=valor` en el archivo $GITHUB_OUTPUT, y queda
+      # disponible como `steps.<id>.outputs.<clave>`.
+      # El tag es el SHA del commit: inmutable, y sabés exactamente qué código tiene.
+      # (`${GITHUB_REPOSITORY,,}` pasa el nombre a minúsculas: ghcr.io lo exige.)
+      - name: Calcular el tag de la imagen
+        id: tag
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login a GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build y push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ───────────────────────────── CD: staging ─────────────────────────────
+  deploy-staging:
+    name: Deploy a staging
+    needs: build-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Usa los secrets del environment "staging" y aparece en la pestaña
+    # Deployments del repo con este link.
+    environment:
+      name: staging
+      url: https://staging.ejemplo.com
+
+    # Concurrency propia del deploy: un solo deploy a staging a la vez, y el
+    # que está corriendo NUNCA se cancela. Si llegan dos más mientras tanto,
+    # queda esperando solo el más nuevo (el del medio se descarta).
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    steps:
+      # 🎭 FALSO: en la vida real acá iría el comando de tu proveedor
+      # (ssh + docker pull, un CLI de la nube, un webhook, etc.).
+      - name: Desplegar (simulado)
+        env:
+          # 👇 La imagen llega desde el output del job build-image.
+          IMAGE: ${{ needs.build-image.outputs.image }}
+          # 👇 El DEPLOY_TOKEN del environment "staging".
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          # Verificamos que el secret llegó SIN imprimirlo.
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            echo "Falta el secret DEPLOY_TOKEN en el environment staging"
+            exit 1
+          fi
+          echo "(simulado) Desplegando $IMAGE en staging"
+
+      - name: Smoke test (simulado)
+        run: echo "(simulado) curl --fail https://staging.ejemplo.com/health"
+
+  # ─────────────────── CD: producción (con el botón) ───────────────────
+  deploy-production:
+    name: Deploy a producción
+    needs: [build-image, deploy-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # 🧑 Si "production" tiene Required reviewers, el job espera acá (hasta
+    # 30 días) a que alguien lo apruebe. Eso es Continuous DELIVERY.
+    # Sin reviewers, pasaría directo: eso sería Continuous DEPLOYMENT.
+    environment:
+      name: production
+      url: https://api.ejemplo.com
+
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Desplegar (simulado)
+        env:
+          # 🔑 La MISMA imagen que pasó por staging. No se vuelve a construir.
+          IMAGE: ${{ needs.build-image.outputs.image }}
+          # Mismo nombre de secret, OTRO valor: el del environment "production".
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$DEPLOY_TOKEN" ]; then
+            echo "Falta el secret DEPLOY_TOKEN en el environment production"
+            exit 1
+          fi
+          echo "(simulado) Desplegando $IMAGE en producción"
+
+      - name: Smoke test (simulado)
+        run: echo "(simulado) curl --fail https://api.ejemplo.com/health"

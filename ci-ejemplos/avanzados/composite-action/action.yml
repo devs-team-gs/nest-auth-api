@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Avanzado · Composite action local: "setup del proyecto"
+#
+# Qué muestra: cómo empaquetar varios steps que se repiten en todos los jobs
+# (pnpm + Node + install + prisma generate) en UNA action propia, que después
+# se usa con un solo `uses:`. La usa `usar-composite.yml`.
+#
+# 📍 Para que ande, este archivo tiene que moverse a:
+#   .github/actions/setup/action.yml
+# (el nombre del archivo es obligatorio: `action.yml`; la carpeta la elegís vos).
+#
+# ⚠️ Ejemplo para mostrar, no se usa en este proyecto porque son 4 steps en un
+# solo workflow: repetirlos es más claro que esconderlos. Paga cuando el mismo
+# setup aparece en 5 jobs o en varios workflows.
+#
+# Composite action vs reusable workflow:
+#   - Composite: agrupa STEPS. Se usa dentro de un job, en la misma máquina.
+#   - Reusable:  agrupa JOBS enteros. Tiene su propio runner.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Setup del proyecto
+description: Instala pnpm y Node, instala dependencias y genera el cliente de Prisma
+
+inputs:
+  node-version:
+    description: 'Versión de Node'
+    required: false
+    default: '24'
+
+runs:
+  using: composite
+  steps:
+    # Sin `version:`: la toma del campo "packageManager" del package.json.
+    - name: Instalar pnpm
+      uses: pnpm/action-setup@v6
+
+    - name: Instalar Node
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    # En una composite action, cada `run:` DEBE declarar su `shell`.
+    # En un workflow común hay un default; acá no.
+    - name: Instalar dependencias
+      run: pnpm install --frozen-lockfile
+      shell: bash
+
+    - name: Generar cliente de Prisma
+      run: pnpm prisma:generate
+      shell: bash
