@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 5 · En PRs también, sin corridas duplicadas y con timeout
+#
+# Qué agrega respecto al paso 4:
+#   - pull_request: el CI corre ANTES de mergear (el que protege main).
+#   - concurrency: un push nuevo cancela la corrida vieja de la misma rama.
+#   - timeout-minutes: el default es 6 horas; un test colgado no te come la cuota.
+#   - name en el job: es el nombre del check que ves en el PR.
+#
+# Es la "versión completa" de la clase teórica, más el paso de Prisma.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main] # confirma que main quedó bien después del merge
+  pull_request:
+    branches: [main] # verifica el PR antes de mergear
+
+concurrency:
+  # workflow + ref: dos pushes al mismo PR comparten grupo → el viejo se cancela.
+  # Un PR y main tienen refs distintas → no se pisan.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, tests y build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Generar cliente de Prisma
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Formato
+        run: pnpm format:check
+
+      - name: Tests unitarios
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

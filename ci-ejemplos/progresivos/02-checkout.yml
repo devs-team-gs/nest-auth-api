@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Paso 2 · Traer el código
+#
+# Qué agrega respecto al paso 1: actions/checkout. Es el primer step de casi
+# cualquier workflow. Sin él, `pnpm install` falla con
+# "ERR_PNPM_NO_PKG_MANIFEST No package.json found".
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  explorar:
+    runs-on: ubuntu-latest
+    steps:
+      # `uses` ejecuta una action (código reusable de otro). `@v7` es la versión mayor.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Ahora sí aparecen package.json, src/, prisma/...
+      - name: Ahora sí
+        run: ls -la
+
+      # Pero fijate lo que NO está: .env, .env.test, node_modules y src/generated
+      # (el cliente de Prisma). Todo lo que está en .gitignore no viaja al runner.
+      - name: Lo que no vino
+        run: ls -la .env .env.test node_modules src/generated || true
